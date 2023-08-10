@@ -48,6 +48,49 @@ static int tvl320_write_reg_check(audio_codec_tvl320_t *codec, int reg, int valu
     return ret;
 }
 
+// Function to convert a negative decimal number to 8-bit two's complement binary
+static int negativeToTwosComplement(int num) {
+    int nBits = 8;
+    unsigned int mask = 1 << (nBits - 1); // Mask to extract the most significant bit
+    unsigned int value = num * -1;        // Convert to positive for conversion
+
+    // Invert the bits
+    for (int i = 0; i < nBits; i++) {
+        value ^= mask; // Toggle the i-th bit
+        mask >>= 1;    // Shift the mask right
+    }
+
+    // Add one to the inverted representation
+    value += 1;
+
+    return value;
+}
+
+static int tvl320_volume_interpolation(int volume) {
+    int volume_transform;
+    float min_db = -50.0;
+    float max_db = 0.0;
+    int ratio = (vol_range.max_vol.vol - vol_range.min_vol.vol) / (vol_range.max_vol.db_value - vol_range.min_vol.db_value);
+    int min_vol = (int) ((min_db - vol_range.min_vol.db_value) * ratio + vol_range.min_vol.vol);
+    int max_vol = (int) ((max_db - vol_range.min_vol.db_value) * ratio + vol_range.min_vol.vol);
+
+    if (volume <= min_vol) {
+        volume_transform = vol_range.min_vol.vol;
+    }
+    else if (volume >= max_vol) {
+        volume_transform = vol_range.max_vol.vol;
+    }
+    else {
+        volume_transform = ((volume - min_vol) * (vol_range.max_vol.vol - vol_range.min_vol.vol) / (max_vol - min_vol)) + vol_range.min_vol.vol;
+    }
+
+    if (volume_transform < 0) {
+        return negativeToTwosComplement(volume_transform);
+    }
+
+    return volume_transform;
+}
+
 static int tvl320_open(const audio_codec_if_t *h, void *cfg, int cfg_size)
 {
     audio_codec_tvl320_t *codec = (audio_codec_tvl320_t *) h;
@@ -152,7 +195,8 @@ static int tvl320_set_vol(const audio_codec_if_t *h, float db_value)
     }
 
     int volume = esp_codec_dev_vol_calc_reg(&vol_range, db_value);
-    int ret = tvl320_write_reg_check(codec, TVL320_DAC_VOLUME_CONTROL_REG65, volume);
+    int volume_transform = tvl320_volume_interpolation(volume);
+    int ret = tvl320_write_reg_check(codec, TVL320_DAC_VOLUME_CONTROL_REG65, volume_transform);
     ESP_LOGD(TAG, "Set volume reg:%x db:%f", volume, db_value);
     return (ret == 0) ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_WRITE_FAIL;
 }
